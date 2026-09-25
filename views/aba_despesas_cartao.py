@@ -1,8 +1,8 @@
+from datetime import datetime, date
+from dateutil.relativedelta import relativedelta
+import calendar
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, date
-import calendar
-from dateutil.relativedelta import relativedelta
 from database import conectar_banco
 from utils import aplicar_mascara_data, is_data_valida
 
@@ -25,11 +25,13 @@ class AbaDespesasCartao:
         self.cb_cartao.pack(anchor="w", pady=(0, 6))
         self.cb_cartao.bind("<<ComboboxSelected>>", lambda e: self.carregar_dados())
 
-        # Valor (Formata ao sair do campo ou pressionar Enter)
+        # Valor (Digitação livre e formatação em tempo real)
         tk.Label(frame_form, text="Valor da Despesa:", bg="#F0F0F0", font=("Arial", 9)).pack(anchor="w", pady=(2, 0))
         self.var_valor = tk.StringVar(value="0,00")
         self.txt_valor = tk.Entry(frame_form, textvariable=self.var_valor, width=32, font=("Arial", 10))
         self.txt_valor.pack(anchor="w", pady=(0, 6))
+        self.txt_valor.bind("<FocusIn>", self.ao_focar_valor)
+        self.txt_valor.bind("<KeyRelease>", self.ao_digitar_valor)
         self.txt_valor.bind("<FocusOut>", self.formatar_ao_sair_valor)
         self.txt_valor.bind("<Return>", self.ao_pressionar_enter_valor)
 
@@ -93,7 +95,7 @@ class AbaDespesasCartao:
         for widget in widgets_enter:
             widget.bind("<Return>", lambda e, w=widget: self.pular_proximo_campo(w))
 
-        # Painel Direito (Tabela e Filtros)
+        # Painel Direito (Tabela com Barra de Rolagem e Filtros)
         frame_direito = tk.Frame(parent, bg="#F0F0F0")
         frame_direito.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
@@ -107,8 +109,12 @@ class AbaDespesasCartao:
         tk.Radiobutton(header_tabela, text="Pago", variable=self.var_filtro, value="Pago", bg="#F0F0F0", command=self.aplicar_filtro).pack(side="right", padx=10)
         tk.Radiobutton(header_tabela, text="Pendente", variable=self.var_filtro, value="Pendente", bg="#F0F0F0", command=self.aplicar_filtro).pack(side="right")
 
+        # Container exclusivo para a Tabela e sua Barra de Rolagem
+        frame_tabela_container = tk.Frame(frame_direito, bg="#F0F0F0")
+        frame_tabela_container.pack(side="top", fill="both", expand=True, pady=(0, 5))
+
         colunas = ("Data", "Cartao", "Descricao", "Categoria", "Subcategoria", "Valor", "Status")
-        self.tabela = ttk.Treeview(frame_direito, columns=colunas, show="headings", height=16)
+        self.tabela = ttk.Treeview(frame_tabela_container, columns=colunas, show="headings", height=16)
         
         self.tabela.tag_configure("tag_despesa_pendente", foreground="#C53030", font=("Arial", 9))
         self.tabela.tag_configure("tag_despesa_pago", foreground="#2F855A", font=("Arial", 9))
@@ -135,16 +141,16 @@ class AbaDespesasCartao:
         self.tabela.column("Valor", width=90, anchor="e")
         self.tabela.column("Status", width=75, anchor="center")
 
-        scrollbar = ttk.Scrollbar(frame_direito, orient="vertical", command=self.tabela.yview)
+        scrollbar = ttk.Scrollbar(frame_tabela_container, orient="vertical", command=self.tabela.yview)
         self.tabela.configure(yscrollcommand=scrollbar.set)
 
-        self.tabela.pack(side="top", fill="both", expand=True)
+        self.tabela.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.tabela.bind("<Double-1>", self.selecionar_registro)
 
         # Painel de Total da Fatura / Exibição
         frame_total = tk.Frame(frame_direito, bg="white", bd=1, relief="solid", padx=10, pady=8)
-        frame_total.pack(fill="x", pady=(10, 0))
+        frame_total.pack(fill="x", pady=(5, 0))
 
         self.lbl_total_fatura = tk.Label(frame_total, text="R$ 0,00", font=("Arial", 11, "bold"), fg="#C53030", bg="white")
         tk.Label(frame_total, text="Valor Total (Filtrado / Exibido):", font=("Arial", 8, "bold"), fg="#718096", bg="white").pack(anchor="w")
@@ -158,13 +164,33 @@ class AbaDespesasCartao:
         self.carregar_dados()
         self.atualizar_opcoes_parcelas()
 
+    def ao_focar_valor(self, event=None):
+        if self.var_valor.get() == "0,00":
+            self.var_valor.set("")
+
+    def ao_digitar_valor(self, event=None):
+        texto = self.var_valor.get()
+        if not texto:
+            return
+        digitos = "".join(filter(str.isdigit, texto))
+        if not digitos:
+            self.var_valor.set("")
+            return
+        val = float(digitos) / 100.0
+        val_str = f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        self.var_valor.set(val_str)
+        try:
+            self.txt_valor.icursor(tk.END)
+        except Exception:
+            pass
+        self.atualizar_opcoes_parcelas()
+
     def formatar_ao_sair_valor(self, event=None):
         texto = self.var_valor.get().strip()
         if not texto:
             self.var_valor.set("0,00")
             self.atualizar_opcoes_parcelas()
             return
-
         limpo = texto.replace("R$", "").replace(".", "").replace(",", ".").strip()
         try:
             val = float(limpo)
@@ -172,7 +198,6 @@ class AbaDespesasCartao:
             self.var_valor.set(val_str)
         except ValueError:
             self.var_valor.set("0,00")
-        
         self.atualizar_opcoes_parcelas()
 
     def ao_pressionar_enter_valor(self, event=None):
@@ -364,7 +389,6 @@ class AbaDespesasCartao:
             cursor.close()
             conn.close()
 
-            # Função segura para calcular o ciclo sem estourar dias inválidos (ex: 29 em fevereiro)
             def obter_ciclo_data(d_date):
                 f_dia = min(fechamento_dia, calendar.monthrange(d_date.year, d_date.month)[1])
                 if d_date.day > f_dia:
@@ -597,7 +621,7 @@ class AbaDespesasCartao:
     def pagar_fatura_periodo(self):
         cartao_nome = self.cb_cartao.get()
         if not cartao_nome:
-            messagebox.showwarning("Aviso", "Selecione o cartão de crédito cuja fatura/período deseja pagar!")
+            messagebox.showwarning("Aviso", "Selecione o cartão de crédito!")
             return
 
         try:
@@ -614,104 +638,175 @@ class AbaDespesasCartao:
                 return
 
             c_fech, c_venc = cartao_info
-            
+            fechamento = c_fech or 24
+            vencimento_dia = c_venc or 1
+
+            # Buscar todas as despesas pendentes deste cartão
             cursor.execute("""
                 SELECT id, valor, data_lancamento, descricao FROM lancamentos 
-                WHERE id_cartao = %s AND recebido = FALSE;
+                WHERE id_cartao = %s AND recebido = FALSE ORDER BY data_lancamento ASC;
             """, (id_cartao,))
-            despesas = cursor.fetchall()
+            despesas_pendentes = cursor.fetchall()
 
-            if not despesas:
+            if not despesas_pendentes:
                 messagebox.showinfo("Informação", "Não há despesas pendentes para este cartão.")
                 cursor.close()
                 conn.close()
                 return
 
-            fechamento = c_fech or 24
-            vencimento_dia = c_venc or 1
+            def obter_ciclo_data(d_date):
+                f_dia = min(fechamento, calendar.monthrange(d_date.year, d_date.month)[1])
+                if d_date.day > f_dia:
+                    r_next = d_date + relativedelta(months=1)
+                    r_ano = r_next.year
+                    r_mes = r_next.month
+                else:
+                    r_ano = d_date.year
+                    r_mes = d_date.month
+                
+                max_dia_fim = calendar.monthrange(r_ano, r_mes)[1]
+                fim_dia = min(fechamento, max_dia_fim)
+                fim = date(r_ano, r_mes, fim_dia)
+                inicio = fim - relativedelta(months=1) + relativedelta(days=1)
+                
+                if vencimento_dia <= fechamento:
+                    venc = date(r_ano, r_mes, 1) + relativedelta(months=1)
+                else:
+                    venc = date(r_ano, r_mes, 1)
+                max_d_venc = calendar.monthrange(venc.year, venc.month)[1]
+                vencimento = date(venc.year, venc.month, min(vencimento_dia, max_d_venc))
+                
+                return (inicio, fim, vencimento)
 
-            hoje = datetime.now().date()
-            f_hoje = min(fechamento, calendar.monthrange(hoje.year, hoje.month)[1])
-            if hoje.day > f_hoje:
-                r_next = hoje + relativedelta(months=1)
-                ref_ano = r_next.year
-                ref_mes = r_next.month
-            else:
-                ref_ano = hoje.year
-                ref_mes = hoje.month
-
-            max_d_fim = calendar.monthrange(ref_ano, ref_mes)[1]
-            data_fim_ciclo = date(ref_ano, ref_mes, min(fechamento, max_d_fim))
-            data_inicio_ciclo = data_fim_ciclo - relativedelta(months=1) + relativedelta(days=1)
-            
-            if vencimento_dia <= fechamento:
-                data_vencimento = date(ref_ano, ref_mes, 1) + relativedelta(months=1)
-            else:
-                data_vencimento = date(ref_ano, ref_mes, 1)
-            
-            max_d_venc = calendar.monthrange(data_vencimento.year, data_vencimento.month)[1]
-            data_vencimento = date(data_vencimento.year, data_vencimento.month, min(vencimento_dia, max_d_venc))
-
-            ids_fatura_atual = []
-            valor_total_fatura = 0.0
-            itens_fatura = []
-
-            for d_id, d_val, d_data, d_desc in despesas:
+            # Agrupar despesas pendentes por período/ciclo
+            ciclos_pendentes = {}
+            for d_id, d_val, d_data, d_desc in despesas_pendentes:
                 if not d_data:
                     continue
+                d_date = d_data.date() if hasattr(d_data, 'date') else d_data
+                chave_ciclo = obter_ciclo_data(d_date)
+
+                if chave_ciclo not in ciclos_pendentes:
+                    ciclos_pendentes[chave_ciclo] = {"ids": [], "valor_total": 0.0, "itens": []}
                 
-                d_data_date = d_data.date() if hasattr(d_data, 'date') else d_data
+                ciclos_pendentes[chave_ciclo]["ids"].append(d_id)
+                v_num = float(d_val or 0)
+                ciclos_pendentes[chave_ciclo]["valor_total"] += v_num
+                ciclos_pendentes[chave_ciclo]["itens"].append(
+                    f"• {d_data.strftime('%d/%m/%Y')} - {d_desc}: R$ {v_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                )
 
-                if data_inicio_ciclo <= d_data_date <= data_fim_ciclo:
-                    ids_fatura_atual.append(d_id)
-                    v_num = float(d_val or 0)
-                    valor_total_fatura += v_num
-                    itens_fatura.append(f"• {d_data.strftime('%d/%m/%Y')} - {d_desc}: R$ {v_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-
-            if not ids_fatura_atual:
-                messagebox.showinfo("Informação", f"Não há despesas pendentes para o ciclo atual ({data_inicio_ciclo.strftime('%d/%m/%Y')} a {data_fim_ciclo.strftime('%d/%m/%Y')}).")
+            if not ciclos_pendentes:
+                messagebox.showinfo("Informação", "Não há períodos pendentes para este cartão.")
                 cursor.close()
                 conn.close()
                 return
 
-            str_vencimento = data_vencimento.strftime("%m/%Y")
-            
-            mensagem_confirmacao = (
-                f"Deseja pagar a fatura do cartão '{cartao_nome}'\n"
-                f"referente ao período ({data_inicio_ciclo.strftime('%d/%m/%Y')} a {data_fim_ciclo.strftime('%d/%m/%Y')})\n"
-                f"com vencimento em: {str_vencimento}\n"
-                f"Valor Total: R$ {valor_total_fatura:,.2f}\n\n"
-                f"Registros incluídos:\n" + "\n".join(itens_fatura[:10])
-            )
-            if len(itens_fatura) > 10:
-                mensagem_confirmacao += f"\n... e mais {len(itens_fatura) - 10} item(ns)."
-
-            if messagebox.askyesno("Confirmar Pagamento de Fatura", mensagem_confirmacao):
-                ids_para_pagar = ids_fatura_atual
-
-                for d_id in ids_para_pagar:
-                    cursor.execute("""
-                        UPDATE lancamentos 
-                        SET recebido = TRUE 
-                        WHERE id = %s;
-                    """, (str(d_id),))
-
-                conn.commit()
-                messagebox.showinfo("Sucesso", f"Fatura com vencimento em {str_vencimento} quitada com sucesso!")
-
-                try:
-                    notebook_pai = self.parent.master
-                    for tab_widget in notebook_pai.winfo_children():
-                        if hasattr(tab_widget, 'recarregar'):
-                            tab_widget.recarregar()
-                except Exception:
-                    pass
-
             cursor.close()
             conn.close()
-            self.carregar_dados()
+
+            # Criar janela de seleção do período
+            janela_sel = tk.Toplevel(self.parent)
+            janela_sel.title(f"Selecionar Período - {cartao_nome}")
+            janela_sel.geometry("460x380")
+            janela_sel.config(bg="#F0F0F0")
+            janela_sel.grab_set()
+
+            tk.Label(
+                janela_sel, 
+                text=f"Selecione o período da fatura a ser paga ({cartao_nome}):", 
+                font=("Arial", 10, "bold"), 
+                bg="#F0F0F0"
+            ).pack(anchor="w", padx=15, pady=(15, 5))
+
+            frame_listbox = tk.Frame(janela_sel, bg="#F0F0F0")
+            frame_listbox.pack(fill="both", expand=True, padx=15, pady=5)
+
+            scrollbar_sel = ttk.Scrollbar(frame_listbox, orient="vertical")
+            listbox_ciclos = tk.Listbox(frame_listbox, font=("Arial", 10), yscrollcommand=scrollbar_sel.set, selectmode=tk.SINGLE, height=10)
+            scrollbar_sel.config(command=listbox_ciclos.yview)
+
+            listbox_ciclos.pack(side="left", fill="both", expand=True)
+            scrollbar_sel.pack(side="right", fill="y")
+
+            chaves_ordenadas = sorted(ciclos_pendentes.keys(), key=lambda x: x[0])
+            for idx, (inicio, fim, vencimento) in enumerate(chaves_ordenadas):
+                dados_c = ciclos_pendentes[(inicio, fim, vencimento)]
+                val_str = f"R$ {dados_c['valor_total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                texto_item = f"Período: {inicio.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')} | Venc: {vencimento.strftime('%m/%Y')} | Total: {val_str}"
+                listbox_ciclos.insert(tk.END, texto_item)
+
+            if chaves_ordenadas:
+                listbox_ciclos.selection_set(0)
+
+            def confirmar_pagamento_selecionado():
+                selecao_lb = listbox_ciclos.curselection()
+                if not selecao_lb:
+                    messagebox.showwarning("Aviso", "Selecione um período na lista!", parent=janela_sel)
+                    return
+                
+                idx_sel = selecao_lb[0]
+                ciclo_escolhido = chaves_ordenadas[idx_sel]
+                dados_escolhidos = ciclos_pendentes[ciclo_escolhido]
+
+                inicio, fim, vencimento = ciclo_escolhido
+                str_vencimento = vencimento.strftime("%m/%Y")
+
+                resumo_itens = "\n".join(dados_escolhidos["itens"][:10])
+                if len(dados_escolhidos["itens"]) > 10:
+                    resumo_itens += f"\n... e mais {len(dados_escolhidos['itens']) - 10} item(ns)."
+
+                msg_conf = (
+                    f"Deseja pagar a fatura do cartão '{cartao_nome}'\n"
+                    f"referente ao período ({inicio.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')})\n"
+                    f"com vencimento em: {str_vencimento}\n"
+                    f"Valor Total: R$ {dados_escolhidos['valor_total']:,.2f}\n\n"
+                    f"Registros incluídos:\n{resumo_itens}"
+                )
+
+                if messagebox.askyesno("Confirmar Pagamento", msg_conf, parent=janela_sel):
+                    try:
+                        conn_up = conectar_banco()
+                        cursor_up = conn_up.cursor()
+
+                        for d_id in dados_escolhidos["ids"]:
+                            cursor_up.execute("""
+                                UPDATE lancamentos 
+                                SET recebido = TRUE 
+                                WHERE id = %s;
+                            """, (str(d_id),))
+
+                        conn_up.commit()
+                        cursor_up.close()
+                        conn_up.close()
+
+                        messagebox.showinfo("Sucesso", f"Fatura com vencimento em {str_vencimento} quitada com sucesso!", parent=janela_sel)
+                        janela_sel.destroy()
+
+                        try:
+                            notebook_pai = self.parent.master
+                            for tab_widget in notebook_pai.winfo_children():
+                                if hasattr(tab_widget, 'recarregar'):
+                                    tab_widget.recarregar()
+                        except Exception:
+                            pass
+
+                        self.carregar_dados()
+                    except Exception as err:
+                        messagebox.showerror("Erro", f"Erro ao efetuar pagamento: {err}", parent=janela_sel)
+
+            btn_conf_pagar = tk.Button(
+                janela_sel, 
+                text="Pagar Período Selecionado", 
+                bg="#2F855A", 
+                fg="white", 
+                font=("Arial", 9, "bold"), 
+                command=confirmar_pagamento_selecionado
+            )
+            btn_conf_pagar.pack(pady=15)
+
         except Exception as ex:
-            messagebox.showerror("Erro", f"Erro ao pagar fatura: {ex}")
+            messagebox.showerror("Erro", f"Erro ao carregar períodos da fatura: {ex}")
 
     def excluir_despesa(self):
         if not self.despesa_selecionada_id:
